@@ -1,80 +1,91 @@
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+import pandas_ta as ta
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-#Import data
-data = pd.read_csv("EURUSD_1H_2020-2024.csv")
-prices = data["close"].values
+# CSV fájl beolvasása
+file_path = "EURUSD_1H_2020-2024.csv"  # Állítsd be a fájl elérési útját
+data = pd.read_csv(file_path)
 
-#Scaler the datas
-scaler = MinMaxScaler(feature_range=(0,1))
-scaled_data = scaler.fit_transform(prices.reshape(-1,1))
+# Időbélyegek kezelése
+data['time'] = pd.to_datetime(data['time'])  # Átalakítás datetime formátumba
+data.set_index('time', inplace=True)  # Beállítjuk az időt indexként
 
-#Create the data window
-window_size = 10
-x,y = [], []
+# RSI és Bollinger Band számítása
+data.ta.rsi(append=True, length=14)
+data.ta.bbands(append=True, length=30, std=2)
 
-for i in range(len(scaled_data) - window_size):
-  x.append(scaled_data[i:i + window_size,0])
-  y.append(scaled_data[i + window_size,0])
-x,y = np.array(x), np.array(y)
+# Átnevezés a könnyebb használhatóság érdekében
+data.rename(columns={'real_volume': 'volume', 'BBL_30_2.0': 'bbl', 'BBM_30_2.0': 'bbm', 'BBU_30_2.0': 'bbh', 'RSI_14': 'rsi'}, inplace=True)
 
-#Change the datas to LSTM
-x = np.reshape(x, (x.shape[0], x.shape[1],1))
+# Csak az utolsó 240 adat kiválasztása (utolsó 10 nap, ha órás adataink vannak)
+data_last_10_days = data.tail(240)
 
-#Create LSTM model
-model = Sequential()
-model.add(LSTM(units=50, return_sequences=True, input_shape=(x.shape[1], 1)))
-model.add(LSTM(units=50))
-model.add(Dense(units=1))
-model.compile(optimizer='adam', loss='mean_squared_error')
+# Create a plot with 2 rows
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], 
+                    subplot_titles=('EUR/USD Gyertyadiagram', 'RSI'),
+                    vertical_spacing=0.25)
 
-#Train the modell
-history = model.fit(x, y, epochs=20, batch_size=32, verbose=1)
+# Gyertyadiagram hozzáadása az első sorhoz
+fig.add_trace(go.Candlestick(x=data_last_10_days.index,
+                             open=data_last_10_days['open'],
+                             high=data_last_10_days['high'],
+                             low=data_last_10_days['low'],
+                             close=data_last_10_days['close'],
+                             name='Candlesticks'),
+              row=1, col=1)
 
-#Create the prediction
-last_10_days = scaled_data[-window_size:]   #last 10 days
-last_10_days = np.reshape(last_10_days, (1, window_size,1))
-predicted_price = model.predict(last_10_days)
-predicted_price = scaler.inverse_transform(predicted_price)
+# Bollinger Bands háttér kitöltése
+fig.add_trace(go.Scatter(x=data_last_10_days.index, y=data_last_10_days['bbh'],
+                         line=dict(color='red', width=1),
+                         name="BBU"),
+              row=1, col=1)
 
-print(f"A következő napi előrejelzett ár: {predicted_price[0][0]}")
+fig.add_trace(go.Scatter(x=data_last_10_days.index, y=data_last_10_days['bbl'],
+                         line=dict(color='green', width=1),
+                         name="BBL"),
+              row=1, col=1)
 
+# Kitöltés a Bollinger Bands közötti területen (BBL és BBM között) zöld
+fig.add_trace(go.Scatter(x=data_last_10_days.index, 
+                         y=data_last_10_days['bbm'],
+                         fill='tonexty',
+                         fillcolor='rgba(255, 0, 0, 0.1)',  # Piros háttér a BBL és BBM között
+                         line=dict(width=0), name="BBL-BBM Fill", showlegend=False),
+              row=1, col=1)
 
-# Plot training loss
-plt.figure(figsize=(10, 5))
-plt.plot(history.history['loss'], label="Loss during training")
-plt.title("Training Loss")
-plt.xlabel("Epochs")
-plt.ylabel("Loss")
-plt.legend()
-plt.show()
+# Kitöltés a Bollinger Bands közötti területen (BBH és BBM között) piros
+fig.add_trace(go.Scatter(x=data_last_10_days.index, 
+                         y=data_last_10_days['bbh'],
+                         fill='tonexty',
+                         fillcolor='rgba(0, 255, 0, 0.1)',  #Zöld háttér a BBH és BBM között
+                         line=dict(width=0), name="BBH-BBM Fill", showlegend=False),
+              row=1, col=1)
 
-# Plot predictions and actual prices
-# Select a subset of prices for better visualization
-num_days = 100  # Number of days to plot
-real_prices = prices[-num_days:]
-input_prices = scaled_data[-(num_days + window_size):-window_size].reshape(-1)
+# Bollinger Bands középvonal hozzáadása
+fig.add_trace(go.Scatter(x=data_last_10_days.index, y=data_last_10_days['bbm'],
+                         line=dict(color='blue', width=1),
+                         name="BBM"),
+              row=1, col=1)
 
-# Create predictions for the last 'num_days'
-predictions = []
-for i in range(len(real_prices)):
-    window = scaled_data[-(num_days + window_size - i):-num_days + i].reshape(1, window_size, 1)
-    pred = model.predict(window)
-    predictions.append(pred[0][0])
+# RSI hozzáadása a második sorhoz
+fig.add_trace(go.Scatter(x=data_last_10_days.index, y=data_last_10_days['rsi'],
+                         line=dict(color='blue', width=2),
+                         name="RSI"),
+              row=2, col=1)
 
-# Rescale predictions back to original scale
-predictions = scaler.inverse_transform(np.array(predictions).reshape(-1, 1)).flatten()
+# Layout beállítások
+fig.update_layout(
+    title='EUR/USD Gyertyadiagram és RSI',
+    xaxis=dict(title='Date'),
+    xaxis2=dict(title='Date'),
+    yaxis=dict(title='Price'),
+    yaxis2=dict(title='RSI', range=[20, 90], tickvals=[20, 30, 40, 50, 60, 70, 80, 90]),
+    showlegend=True,
+    width=1980,
+    height=1024,
+    sliders=[]
+)
 
-# Plot
-plt.figure(figsize=(14, 7))
-plt.plot(range(len(real_prices)), real_prices, color="blue", label="Actual Prices")
-plt.plot(range(len(predictions)), predictions, color="red", linestyle="--", label="Predicted Prices")
-plt.title("Forex Price Prediction")
-plt.xlabel("Days")
-plt.ylabel("Price")
-plt.legend()
-plt.show()
+# Diagram megjelenítése
+fig.show()
