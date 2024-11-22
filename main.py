@@ -17,9 +17,51 @@ data.ta.bbands(append=True, length=30, std=2)
 
 # Átnevezés a könnyebb használhatóság érdekében
 data.rename(columns={'real_volume': 'volume', 'BBL_30_2.0': 'bbl', 'BBM_30_2.0': 'bbm', 'BBU_30_2.0': 'bbh', 'RSI_14': 'rsi'}, inplace=True)
-
+data['bb_width'] = (data['bbh'] - data['bbl']) / data['bbm']
 # Csak az utolsó 240 adat kiválasztása (utolsó 10 nap, ha órás adataink vannak)
-data_last_10_days = data.tail(240)
+data_last_10_days = data.tail(2400)
+
+
+#Create the Signal logic
+def apply_total_signal(data, rsi_threshold_low=30, rsi_threshold_high=70, bb_width_threshold = 0.0015):
+    # Initialize the 'TotalSignal' column
+    data['TotalSignal'] = 0
+
+    for i in range(1, len(data)):
+        # Previous candle conditions
+        prev_candle_closes_below_bb = data['close'].iloc[i-1] < data['bbl'].iloc[i-1]
+        prev_rsi_below_thr = data['rsi'].iloc[i-1] < rsi_threshold_low
+        # Current candle conditions
+        closes_above_prev_high = data['close'].iloc[i] > data['high'].iloc[i-1]
+        bb_width_greater_threshold = data['bb_width'].iloc[i] > bb_width_threshold
+
+        # Combine conditions
+        if (prev_candle_closes_below_bb and
+            prev_rsi_below_thr and
+            closes_above_prev_high and
+            bb_width_greater_threshold):
+            data.at[i, 'TotalSignal'] = 2  # Set the buy signal for the current candle
+
+        # Previous candle conditions
+        prev_candle_closes_above_bb = data['Close'].iloc[i-1] > data['bbh'].iloc[i-1]
+        prev_rsi_above_thr = data['rsi'].iloc[i-1] > rsi_threshold_high
+        # Current candle conditions
+        closes_below_prev_low = data['close'].iloc[i] < data['low'].iloc[i-1]
+        bb_width_greater_threshold = data['bb_width'].iloc[i] > bb_width_threshold
+
+        # Combine conditions
+        if (prev_candle_closes_above_bb and
+            prev_rsi_above_thr and
+            closes_below_prev_low and
+            bb_width_greater_threshold):
+            data.at[i, 'TotalSignal'] = 1  # Set the sell signal for the current candle
+
+
+    return data
+
+
+
+
 
 # Create a plot with 2 rows
 fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], 
@@ -70,9 +112,30 @@ fig.add_trace(go.Scatter(x=data_last_10_days.index, y=data_last_10_days['bbm'],
 
 # RSI hozzáadása a második sorhoz
 fig.add_trace(go.Scatter(x=data_last_10_days.index, y=data_last_10_days['rsi'],
-                         line=dict(color='blue', width=2),
+                         line=dict(color='blue', width=1),
                          name="RSI"),
               row=2, col=1)
+# Vízszintes vonalak hozzáadása az RSI grafikonhoz (30 és 70 szint)
+fig.add_shape(
+    type="line",
+    x0=data_last_10_days.index.min(),
+    x1=data_last_10_days.index.max(),
+    y0=30,
+    y1=30,
+    line=dict(color="green", width=2, dash="solid"),
+    xref="x2",  # Az RSI subplot x tengelyére vonatkozik
+    yref="y2",  # Az RSI subplot y tengelyére vonatkozik
+)
+fig.add_shape(
+    type="line",
+    x0=data_last_10_days.index.min(),
+    x1=data_last_10_days.index.max(),
+    y0=70,
+    y1=70,
+    line=dict(color="red", width=2, dash="solid"),
+    xref="x2",  # Az RSI subplot x tengelyére vonatkozik
+    yref="y2",  # Az RSI subplot y tengelyére vonatkozik
+)
 
 # Layout beállítások
 fig.update_layout(
