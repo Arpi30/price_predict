@@ -3,6 +3,11 @@ import pandas_ta as ta
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from sklearn.model_selection import train_test_split
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from sklearn.metrics import classification_report
 
 # CSV fájl beolvasása
 file_path = "EURUSD_1H_2020-2024.csv"  # Állítsd be a fájl elérési útját
@@ -73,6 +78,38 @@ apply_total_signal(data=data, rsi_threshold_low=30, rsi_threshold_high=70, bb_wi
 data['pointpos'] = data.apply(lambda row: pointpos(row), axis=1)
 
 
+#Define the test and training dataframe nad create a neural network with Sequential model
+# A célváltozó: buy/sell jelzés
+y = data['totalSignal']  # totalSignal 1=Sell, 2=Buy, 0=No Signal
+
+# Az input jellemzők: árfolyamok és technikai indikátorok
+X = data[['open', 'high', 'low', 'close', 'rsi', 'bbl', 'bbm', 'bbh', 'bb_width']]
+
+X = X.dropna()
+y = y[X.index]
+
+# Train-test split (80% tréning adatok, 20% tesztadatok)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Neurális Hálózat modell készítése
+model_nn = Sequential([
+    Dense(64, input_dim=X_train.shape[1], activation='relu'),
+    Dense(32, activation='relu'),
+    Dense(1, activation='sigmoid')  # Binary classification
+])
+# Modell kompilálása
+model_nn.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+# Modell tanítása (fit)
+model_nn.fit(X_train, y_train, epochs=10, batch_size=32, validation_data=(X_test, y_test))
+
+# Előrejelzés készítése
+y_pred_nn = (model_nn.predict(X_test) > 0.5).astype("int32")
+
+# Eredmény kiértékelése
+print(classification_report(y_test, y_pred_nn))
+
+####################################### PLOTING#################################
 # Csak az utolsó 240 adat kiválasztása (utolsó 10 nap, ha órás adataink vannak)
 data_last_10_days = data.tail(240)
 
@@ -166,7 +203,7 @@ fig.update_layout(
     yaxis2=dict(title='RSI', range=[20, 90], tickvals=[20, 30, 40, 50, 60, 70, 80, 90]),
     showlegend=True,
     width=1980,
-    height=1024,
+    height=1400,
     sliders=[]
 )
 
