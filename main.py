@@ -14,6 +14,11 @@ import matplotlib.pyplot as plt
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.layers import Dropout
 
+# Következő teendők.
+# A model kész viszont a nem egyenlő számú buy és sell miatt az egyik érték dominál a tanulás során. Ezt finomhangolni kell esetlegesen balance függvénnyel vagy más tanulási rátával
+#
+#
+
 
 # CSV fájl beolvasása
 file_path = "EURUSD_1H_2020-2024.csv"  # Állítsd be a fájl elérési útját
