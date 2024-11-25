@@ -5,9 +5,15 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from sklearn.model_selection import train_test_split
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
 from sklearn.metrics import classification_report
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Input
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import Dropout
+
 
 # CSV fájl beolvasása
 file_path = "EURUSD_1H_2020-2024.csv"  # Állítsd be a fájl elérési útját
@@ -24,8 +30,6 @@ data.ta.bbands(append=True, length=30, std=2)
 # Átnevezés a könnyebb használhatóság érdekében
 data.rename(columns={'real_volume': 'volume', 'BBL_30_2.0': 'bbl', 'BBM_30_2.0': 'bbm', 'BBU_30_2.0': 'bbh', 'RSI_14': 'rsi'}, inplace=True)
 data['bb_width'] = (data['bbh'] - data['bbl']) / data['bbm']
-
-
 
 #Create the Signal logic
 def apply_total_signal(data, rsi_threshold_low=30, rsi_threshold_high=70, bb_width_threshold=0.0015):
@@ -77,39 +81,55 @@ def pointpos(x):
 apply_total_signal(data=data, rsi_threshold_low=30, rsi_threshold_high=70, bb_width_threshold=0.001)
 data['pointpos'] = data.apply(lambda row: pointpos(row), axis=1)
 
+########################### Create the model ####################################
 
-#Define the test and training dataframe nad create a neural network with Sequential model
-# A célváltozó: buy/sell jelzés
-y = data['totalSignal']  # totalSignal 1=Sell, 2=Buy, 0=No Signal
+# Csak a Buy és Sell jelek megtartása
+filtered_data = data[data['totalSignal'].isin([1, 2])]
 
-# Az input jellemzők: árfolyamok és technikai indikátorok
-X = data[['open', 'high', 'low', 'close', 'rsi', 'bbl', 'bbm', 'bbh', 'bb_width']]
+X = filtered_data[['open', 'high', 'low', 'close', 'rsi', 'bbl', 'bbm', 'bbh', 'bb_width']]
+y = filtered_data['totalSignal'] - 1  # Átalakítás 0 (Sell) és 1 (Buy) címkékre
 
-X = X.dropna()
-y = y[X.index]
-
-# Train-test split (80% tréning adatok, 20% tesztadatok)
+# Train-test split
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Neurális Hálózat modell készítése
-model_nn = Sequential([
-    Dense(64, input_dim=X_train.shape[1], activation='relu'),
-    Dense(32, activation='relu'),
-    Dense(1, activation='sigmoid')  # Binary classification
-])
-# Modell kompilálása
-model_nn.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+# Neurális hálózat módosítása
+model = Sequential()
+model.add(Input(shape=(X_train.shape[1],)))
+model.add(Dense(128, activation='relu'))
+model.add(Dropout(0.2))
+model.add(Dense(64, activation='relu'))
+model.add(Dense(1, activation='sigmoid'))  # Sigmoid aktiváció egy bináris kimenetre
 
-# Modell tanítása (fit)
-model_nn.fit(X_train, y_train, epochs=10, batch_size=32, validation_data=(X_test, y_test))
+# Modell kompilálása
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy', 'Precision', 'Recall'])
+
+# Early stopping beállítása
+early_stopping = EarlyStopping(
+    monitor='val_loss',  # Mit figyeljünk: itt a validációs veszteség
+    patience=5,          # Hány epizód után álljon meg, ha nincs javulás
+    restore_best_weights=True  # A legjobb modell súlyainak visszaállítása
+)
+
+# Modell tanítása
+model.fit(X_train, y_train, epochs=20, batch_size=64, validation_data=(X_test, y_test), callbacks=[early_stopping])
+
 
 # Előrejelzés készítése
-y_pred_nn = (model_nn.predict(X_test) > 0.5).astype("int32")
+y_pred_nn = model.predict(X_test)
+y_pred_classes = (y_pred_nn > 0.5).astype(int)  # Bináris osztályozás küszöbértékkel
 
 # Eredmény kiértékelése
-print(classification_report(y_test, y_pred_nn))
+print(classification_report(y_test, y_pred_classes))
 
-####################################### PLOTING#################################
+cm = confusion_matrix(y_test, y_pred_classes)
+print(cm)
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Sell', 'Buy'], yticklabels=['Sell', 'Buy'])
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.title('Confusion Matrix')
+plt.show()
+
+####################################### PLOTING #################################
 # Csak az utolsó 240 adat kiválasztása (utolsó 10 nap, ha órás adataink vannak)
 data_last_10_days = data.tail(240)
 
