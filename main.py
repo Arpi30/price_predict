@@ -8,11 +8,13 @@ import tensorflow as tf
 from sklearn.metrics import classification_report
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.optimizers import Adam
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.layers import Dropout
+from imblearn.over_sampling import SMOTE
 
 # Következő teendők.
 # A model kész viszont a nem egyenlő számú buy és sell miatt az egyik érték dominál a tanulás során. Ezt finomhangolni kell esetlegesen balance függvénnyel vagy más tanulási rátával
@@ -20,19 +22,19 @@ from tensorflow.keras.layers import Dropout
 #
 
 
-# CSV fájl beolvasása
-file_path = "EURUSD_1H_2020-2024.csv"  # Állítsd be a fájl elérési útját
+# CSV fájl beolvasása pandassal
+file_path = "EURUSD_1H_2020-2024.csv"
 data = pd.read_csv(file_path)
 
 # Időbélyegek kezelése
 data['time'] = pd.to_datetime(data['time'])  # Átalakítás datetime formátumba
 data.set_index('time', inplace=True)  # Beállítjuk az időt indexként
 
-# RSI és Bollinger Band számítása
+# RSI és Bollinger Band meghívása
 data.ta.rsi(append=True, length=14)
 data.ta.bbands(append=True, length=30, std=2)
 
-# Átnevezés a könnyebb használhatóság érdekében
+# az újonnan keletkezett oszlopok átnevezés a könnyebb használhatóság érdekében
 data.rename(columns={'real_volume': 'volume', 'BBL_30_2.0': 'bbl', 'BBM_30_2.0': 'bbm', 'BBU_30_2.0': 'bbh', 'RSI_14': 'rsi'}, inplace=True)
 data['bb_width'] = (data['bbh'] - data['bbl']) / data['bbm']
 
@@ -97,16 +99,23 @@ y = filtered_data['totalSignal'] - 1  # Átalakítás 0 (Sell) és 1 (Buy) címk
 # Train-test split
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+# SMOTE alkalmazása a tanulóhalmazra
+smote = SMOTE(sampling_strategy=1.0, random_state=42)
+X_train_smote, y_train_smote = smote.fit_resample(X_train, y_train)
+
+print(f"Eredeti osztályeloszlás: {np.bincount(y_train)}")
+print(f"SMOTE utáni osztályeloszlás: {np.bincount(y_train_smote)}")
+
 # Neurális hálózat módosítása
 model = Sequential()
-model.add(Input(shape=(X_train.shape[1],)))
+model.add(Input(shape=(X_train_smote.shape[1],)))
 model.add(Dense(128, activation='relu'))
 model.add(Dropout(0.2))
 model.add(Dense(64, activation='relu'))
 model.add(Dense(1, activation='sigmoid'))  # Sigmoid aktiváció egy bináris kimenetre
 
 # Modell kompilálása
-model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy', 'Precision', 'Recall'])
+model.compile(optimizer=Adam(learning_rate=0.01), loss='binary_crossentropy', metrics=['accuracy'])
 
 # Early stopping beállítása
 early_stopping = EarlyStopping(
@@ -116,7 +125,9 @@ early_stopping = EarlyStopping(
 )
 
 # Modell tanítása
-model.fit(X_train, y_train, epochs=20, batch_size=64, validation_data=(X_test, y_test), callbacks=[early_stopping])
+#model.fit(X_train, y_train, epochs=10, batch_size=64, validation_data=(X_test, y_test))
+model.fit(X_train_smote, y_train_smote, epochs=20, batch_size=64, validation_data=(X_test, y_test))
+
 
 
 # Előrejelzés készítése
@@ -228,7 +239,7 @@ fig.update_layout(
     yaxis2=dict(title='RSI', range=[20, 90], tickvals=[20, 30, 40, 50, 60, 70, 80, 90]),
     showlegend=True,
     width=1980,
-    height=1400,
+    height=2000,
     sliders=[]
 )
 
