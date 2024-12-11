@@ -16,12 +16,6 @@ from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.layers import Dropout
 from imblearn.over_sampling import SMOTE
 
-# Következő teendők.
-# A model kész viszont a nem egyenlő számú buy és sell miatt az egyik érték dominál a tanulás során. Ezt finomhangolni kell esetlegesen balance függvénnyel vagy más tanulási rátával
-#
-#
-
-
 # CSV fájl beolvasása pandassal
 file_path = "EURUSD_1H_2020-2024.csv"
 data = pd.read_csv(file_path)
@@ -36,44 +30,75 @@ data.ta.bbands(append=True, length=30, std=2)
 
 # az újonnan keletkezett oszlopok átnevezés a könnyebb használhatóság érdekében
 data.rename(columns={'real_volume': 'volume', 'BBL_30_2.0': 'bbl', 'BBM_30_2.0': 'bbm', 'BBU_30_2.0': 'bbh', 'RSI_14': 'rsi'}, inplace=True)
+# A bb szélesség kiszámítása a volatilitás miatt
 data['bb_width'] = (data['bbh'] - data['bbl']) / data['bbm']
 
-#Create the Signal logic
+#Jelző logika létrehozása
+# átadjuk az adatot és a kereskedő indikátorok szélsőértékeit
 def apply_total_signal(data, rsi_threshold_low=30, rsi_threshold_high=70, bb_width_threshold=0.0015):
-    # Kezdeti feltételek
+    """
+    A függvény a `data` adathalmazban kiszámít egy összesített jelzést (`totalSignal`) az adott kereskedési stratégiához.
+    Az összesített jelzés értékei:
+      - 2: Buy (vételi jelzés)
+      - 1: Sell (eladási jelzés)
+    
+    Paraméterek:
+        data: pandas DataFrame, amely tartalmazza a kereskedési adatokat (záróár, RSI, Bollinger szintek, stb.).
+        rsi_threshold_low: float, az RSI alacsony küszöbértéke (alapértelmezett: 30).
+        rsi_threshold_high: float, az RSI magas küszöbértéke (alapértelmezett: 70).
+        bb_width_threshold: float, a Bollinger Band szélességének küszöbértéke (alapértelmezett: 0.0015).
+
+    Visszatérési érték:
+        A bemeneti `data` DataFrame kiegészítve a `totalSignal` oszloppal, amely tartalmazza az összesített jelzéseket.
+    """
+    
+    # Kezdeti feltételek: Hozzáadunk egy új oszlopot az összesített jelzések számára, alapértelmezetten 0 értékkel.
     data['totalSignal'] = 0
 
-    # Feltételek kiszámítása
+    # --- Buy (vételi) jelzés feltételei ---
+    # Az előző gyertya (candle) záróára az alsó Bollinger szint (BBL) alatt volt.
     prev_candle_closes_below_bb = data['close'].shift(1) < data['bbl'].shift(1)
+    # Az előző gyertya RSI értéke alacsonyabb volt az alsó küszöbértéknél (pl. 30).
     prev_rsi_below_thr = data['rsi'].shift(1) < rsi_threshold_low
+    # Az aktuális záróár meghaladja az előző gyertya legmagasabb árát.
     closes_above_prev_high = data['close'] > data['high'].shift(1)
+    # A Bollinger Band szélessége nagyobb, mint a meghatározott küszöbérték.
     bb_width_greater_threshold = data['bb_width'] > bb_width_threshold
 
-    # Buy jelzés
+    # Kombinált feltételek: Ezek együttesen határozzák meg a vételi jelzést.
     buy_signal = (
-        prev_candle_closes_below_bb &
-        prev_rsi_below_thr &
-        closes_above_prev_high &
-        bb_width_greater_threshold
+        prev_candle_closes_below_bb &  # Az előző gyertya záróára az alsó Bollinger alatt volt.
+        prev_rsi_below_thr &          # Az RSI alacsonyabb volt a küszöbértéknél.
+        closes_above_prev_high &      # Az aktuális ár meghaladja az előző gyertya legmagasabb árát.
+        bb_width_greater_threshold    # A Bollinger Band szélessége elég nagy.
     )
 
-    # Sell jelzés
+    # --- Sell (eladási) jelzés feltételei ---
+    # Az előző gyertya záróára a felső Bollinger szint (BBH) felett volt.
     prev_candle_closes_above_bb = data['close'].shift(1) > data['bbh'].shift(1)
+    # Az előző gyertya RSI értéke magasabb volt a felső küszöbértéknél (pl. 70).
     prev_rsi_above_thr = data['rsi'].shift(1) > rsi_threshold_high
+    # Az aktuális záróár alacsonyabb az előző gyertya legalacsonyabb áránál.
     closes_below_prev_low = data['close'] < data['low'].shift(1)
 
+    # Kombinált feltételek: Ezek együttesen határozzák meg az eladási jelzést.
     sell_signal = (
-        prev_candle_closes_above_bb &
-        prev_rsi_above_thr &
-        closes_below_prev_low &
-        bb_width_greater_threshold
+        prev_candle_closes_above_bb &  # Az előző gyertya záróára a felső Bollinger felett volt.
+        prev_rsi_above_thr &           # Az RSI magasabb volt a küszöbértéknél.
+        closes_below_prev_low &        # Az aktuális ár az előző gyertya legalacsonyabb ára alatt van.
+        bb_width_greater_threshold     # A Bollinger Band szélessége elég nagy.
     )
 
-    # Összesített jelzés
+    # --- Összesített jelzés beállítása ---
+    # Ha a vételi jelzés feltételei teljesülnek, a 'totalSignal' értéke 2. 
+    # Kiválasztjuk azokat a sorokat amellyeknél a feltétel teljesül és a .loc függvénnyel beállítjuk őket 1-re vagy 2-re
     data.loc[buy_signal, 'totalSignal'] = 2
+    # Ha az eladási jelzés feltételei teljesülnek, a 'totalSignal' értéke 1.
     data.loc[sell_signal, 'totalSignal'] = 1
 
+    # A módosított DataFrame visszaadása, amely tartalmazza az összesített jelzéseket.
     return data
+
 
 
 #define the entry points
@@ -89,7 +114,7 @@ apply_total_signal(data=data, rsi_threshold_low=30, rsi_threshold_high=70, bb_wi
 data['pointpos'] = data.apply(lambda row: pointpos(row), axis=1)
 
 ########################### Create the model ####################################
-
+# Adat tisztítás
 # Csak a Buy és Sell jelek megtartása
 filtered_data = data[data['totalSignal'].isin([1, 2])]
 
@@ -99,14 +124,14 @@ y = filtered_data['totalSignal'] - 1  # Átalakítás 0 (Sell) és 1 (Buy) címk
 # Train-test split
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# SMOTE alkalmazása a tanulóhalmazra
+# SMOTE alkalmazása a tanulóhalmazra. Szintetikus adatokat generál az alulreprezentált osztály számára mivel a sell pozícióból kevesebb van
 smote = SMOTE(sampling_strategy=1.0, random_state=42)
 X_train_smote, y_train_smote = smote.fit_resample(X_train, y_train)
 
 print(f"Eredeti osztályeloszlás: {np.bincount(y_train)}")
 print(f"SMOTE utáni osztályeloszlás: {np.bincount(y_train_smote)}")
 
-# Neurális hálózat módosítása
+# Neurális hálózat létrehozása, bemeneti adatokkal, 3 réteggel, dropout-tal és Sigmoid aktivációs függvénnyel mivel bináris kimenetre számítunk
 model = Sequential()
 model.add(Input(shape=(X_train_smote.shape[1],)))
 model.add(Dense(128, activation='relu'))
@@ -125,18 +150,19 @@ early_stopping = EarlyStopping(
 )
 
 # Modell tanítása
-#model.fit(X_train, y_train, epochs=10, batch_size=64, validation_data=(X_test, y_test))
-model.fit(X_train_smote, y_train_smote, epochs=20, batch_size=64, validation_data=(X_test, y_test))
+model.fit(X_train_smote, y_train_smote, epochs=20, batch_size=64, validation_data=(X_test, y_test), callbacks=[early_stopping])
 
 
 
 # Előrejelzés készítése
 y_pred_nn = model.predict(X_test)
-y_pred_classes = (y_pred_nn > 0.5).astype(int)  # Bináris osztályozás küszöbértékkel
+# Bináris osztályozás küszöbértékkel
+y_pred_classes = (y_pred_nn > 0.5).astype(int)  
 
 # Eredmény kiértékelése
 print(classification_report(y_test, y_pred_classes))
 
+# Konfúziós mátrix
 cm = confusion_matrix(y_test, y_pred_classes)
 print(cm)
 sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Sell', 'Buy'], yticklabels=['Sell', 'Buy'])
@@ -202,7 +228,7 @@ fig.add_trace(go.Scatter(x=data_last_10_days.index, y=data_last_10_days['rsi'],
                          name="RSI"),
               row=2, col=1)
 
-# A jelölés hozzáadása
+# A jelölés hozzáadása a belépő pontoknál
 fig.add_trace(go.Scatter(x=data_last_10_days.index, y=data_last_10_days['pointpos'], mode="markers",
                          marker=dict(size=8, color="MediumPurple"),
                          name="entry"),
@@ -216,8 +242,8 @@ fig.add_shape(
     y0=30,
     y1=30,
     line=dict(color="green", width=2, dash="solid"),
-    xref="x2",  # Az RSI subplot x tengelyére vonatkozik
-    yref="y2",  # Az RSI subplot y tengelyére vonatkozik
+    xref="x2",
+    yref="y2",  
 )
 fig.add_shape(
     type="line",
@@ -226,8 +252,8 @@ fig.add_shape(
     y0=70,
     y1=70,
     line=dict(color="red", width=2, dash="solid"),
-    xref="x2",  # Az RSI subplot x tengelyére vonatkozik
-    yref="y2",  # Az RSI subplot y tengelyére vonatkozik
+    xref="x2", 
+    yref="y2",
 )
 
 # Layout beállítások
